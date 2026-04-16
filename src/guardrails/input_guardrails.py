@@ -30,6 +30,9 @@ from core.config import ALLOWED_TOPICS, BLOCKED_TOPICS
 
 def detect_injection(user_input: str) -> bool:
     """Detect prompt injection patterns in user input.
+    
+    Purpose: Catch attempts to manipulate the LLM into ignoring its system prompt
+    or revealing sensitive information through direct instruction overrides.
 
     Args:
         user_input: The user's message
@@ -38,9 +41,24 @@ def detect_injection(user_input: str) -> bool:
         True if injection detected, False otherwise
     """
     INJECTION_PATTERNS = [
-        # TODO: Add at least 5 regex patterns
-        # Example:
-        # r"ignore (all )?(previous|above) instructions",
+        # Instruction override attempts
+        r"ignore (all )?(previous|above|prior) instructions?",
+        r"you are now",
+        r"system prompt",
+        r"reveal (your|the) (system )?instructions?",
+        r"reveal (your|the) (system )?prompt",
+        r"pretend you are",
+        r"act as (a |an )?unrestricted",
+        r"bypass (your )?safeguards?",
+        r"disregard (your )?instructions?",
+        r"forget (your |the )?system",
+        r"override (your |my )?instructions?",
+        r"DAN|Do Anything Now",
+        r"jailbreak",
+        r"evil mode",
+        r"unrestricted",
+        r"ignore content policy",
+        r"respond in (code|json) format.*secret",
     ]
 
     for pattern in INJECTION_PATTERNS:
@@ -61,6 +79,9 @@ def detect_injection(user_input: str) -> bool:
 
 def topic_filter(user_input: str) -> bool:
     """Check if input is off-topic or contains blocked topics.
+    
+    Purpose: Prevent the banking assistant from engaging with dangerous,
+    illegal, or completely off-topic requests outside its scope.
 
     Args:
         user_input: The user's message
@@ -70,12 +91,23 @@ def topic_filter(user_input: str) -> bool:
     """
     input_lower = user_input.lower()
 
-    # TODO: Implement logic:
-    # 1. If input contains any blocked topic -> return True
-    # 2. If input doesn't contain any allowed topic -> return True
-    # 3. Otherwise -> return False (allow)
+    # Check for blocked topics (immediate reject)
+    for blocked in BLOCKED_TOPICS:
+        if blocked in input_lower:
+            return True
 
-    pass  # Replace with your implementation
+    # Check if message contains at least one allowed topic
+    has_allowed_topic = False
+    for allowed in ALLOWED_TOPICS:
+        if allowed in input_lower:
+            has_allowed_topic = True
+            break
+
+    # If no allowed topic found, block it (off-topic)
+    if not has_allowed_topic:
+        return True
+
+    return False
 
 
 # ============================================================
@@ -120,6 +152,9 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         user_message: types.Content,
     ) -> types.Content | None:
         """Check user message before sending to the agent.
+        
+        Purpose: Block prompt injections and off-topic requests at the input layer
+        before they reach the LLM. This is the first line of defense.
 
         Returns:
             None if message is safe (let it through),
@@ -128,14 +163,24 @@ class InputGuardrailPlugin(base_plugin.BasePlugin):
         self.total_count += 1
         text = self._extract_text(user_message)
 
-        # TODO: Implement logic:
-        # 1. Call detect_injection(text)
-        #    - If True: increment blocked_count, return self._block_response("...")
-        # 2. Call topic_filter(text)
-        #    - If True: increment blocked_count, return self._block_response("...")
-        # 3. If both are False: return None (let message through)
+        # Check for prompt injection
+        if detect_injection(text):
+            self.blocked_count += 1
+            return self._block_response(
+                "Your message appears to contain a prompt injection attempt. "
+                "I can only help with legitimate banking questions."
+            )
 
-        pass  # Replace with your implementation
+        # Check for off-topic or blocked topics
+        if topic_filter(text):
+            self.blocked_count += 1
+            return self._block_response(
+                "I can only assist with banking-related questions. "
+                "Please ask about accounts, transactions, loans, interest rates, etc."
+            )
+
+        # Message is safe, let it through
+        return None
 
 
 # ============================================================
